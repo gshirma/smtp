@@ -1,7 +1,7 @@
 # SMTP
 
 Publisher: Splunk <br>
-Connector Version: 3.3.3 <br>
+Connector Version: 3.3.8 <br>
 Product Vendor: Generic <br>
 Product Name: SMTP <br>
 Minimum Product Version: 6.3.0
@@ -162,6 +162,14 @@ This app provides the ability to send email using SMTP
 
 ## Actions Key Points
 
+- Send HTMLEmail
+
+  - **should sanitize template** (`should_sanitize_template`) defaults to true. When false, the supplied
+    HTML body is sent without sanitization; neither Tidy nor Bleach processes it.
+  - When true or omitted, Tidy normalizes the HTML and Microsoft Office markup, then Bleach strips unsupported
+    tags and attributes while retaining the supported HTML, CSS, and URL protocols. This can change
+    the body formatting. It does not convert arbitrary XML schemas into HTML.
+
 - Send Email
 
   - For email consisting of HTML body to be processed correctly as HTML, it must start with
@@ -212,6 +220,7 @@ VARIABLE | REQUIRED | TYPE | DESCRIPTION
 **scopes** | optional | string | OAuth API Scope (space-separated)(For OAuth) |
 **sender_address** | optional | string | Sender Address |
 **ssl_config** | required | string | SSL Method |
+**verify_server_cert** | optional | boolean | Verify the SMTP server TLS certificate |
 **allow_smtputf8** | optional | boolean | Enable SMTPUTF8 support (Check this only if the SMTP server supports SMTPUTF8 option) |
 **encoding** | optional | boolean | Enable Unicode support |
 
@@ -227,7 +236,7 @@ VARIABLE | REQUIRED | TYPE | DESCRIPTION
 Validate the asset configuration for connectivity. This action logs into the device and sends a test email to check the connection and credentials
 
 Type: **test** <br>
-Read only: **True**
+Read only: **False**
 
 #### Action Parameters
 
@@ -335,6 +344,7 @@ PARAMETER | REQUIRED | DESCRIPTION | TYPE | CONTAINS
 **content_id4** | optional | Optional content-id for attachment, typically used in image link referrals | string | |
 **attachment5** | optional | Vault id for attachment | string | |
 **content_id5** | optional | Optional content-id for attachment, typically used in image link referrals | string | |
+**should_sanitize_template** | optional | Normalize the HTML body using Tidy, then strip unsupported tags and attributes using Bleach | boolean | |
 
 #### Action Output
 
@@ -365,12 +375,13 @@ action_result.summary | string | | |
 action_result.message | string | | Email sent |
 summary.total_objects | numeric | | 1 |
 summary.total_objects_successful | numeric | | 1 |
+action_result.parameter.should_sanitize_template | boolean | | |
 
 ______________________________________________________________________
 
 Auto-generated Splunk SOAR Connector documentation.
 
-Copyright 2025 Splunk Inc.
+Copyright 2026 Splunk Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

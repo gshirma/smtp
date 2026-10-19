@@ -5,15 +5,15 @@
     "publisher": "Splunk",
     "type": "email",
     "main_module": "smtp_connector.py",
-    "app_version": "3.3.3",
-    "utctime_updated": "2025-10-06T19:55:25.946866Z",
+    "app_version": "3.3.8",
+    "utctime_updated": "2026-10-07T16:51:30.031203Z",
     "package_name": "phantom_smtp",
     "product_vendor": "Generic",
     "product_name": "SMTP",
     "product_version_regex": ".*",
     "min_phantom_version": "6.3.0",
     "rest_handler": "request_handler.handle_request",
-    "license": "Copyright (c) 2016-2025 Splunk Inc.",
+    "license": "Copyright (c) 2016-2026 Splunk Inc.",
     "logo": "logo_splunk.svg",
     "logo_dark": "logo_splunk_dark.svg",
     "python_version": "3.9, 3.13",
@@ -102,15 +102,21 @@
                 "StartTLS"
             ]
         },
-        "allow_smtputf8": {
+        "verify_server_cert": {
             "data_type": "boolean",
             "order": 13,
+            "description": "Verify the SMTP server TLS certificate",
+            "default": true
+        },
+        "allow_smtputf8": {
+            "data_type": "boolean",
+            "order": 14,
             "description": "Enable SMTPUTF8 support (Check this only if the SMTP server supports SMTPUTF8 option)",
             "default": true
         },
         "encoding": {
             "data_type": "boolean",
-            "order": 14,
+            "order": 15,
             "description": "Enable Unicode support",
             "default": true
         }
@@ -121,7 +127,7 @@
             "description": "Validate the asset configuration for connectivity. This action logs into the device and sends a test email to check the connection and credentials",
             "type": "test",
             "identifier": "test_connectivity",
-            "read_only": true,
+            "read_only": false,
             "parameters": {},
             "output": [],
             "versions": "EQ(*)"
@@ -518,6 +524,12 @@
                     "description": "Optional content-id for attachment, typically used in image link referrals",
                     "data_type": "string",
                     "order": 18
+                },
+                "should_sanitize_template": {
+                    "description": "Normalize the HTML body using Tidy, then strip unsupported tags and attributes using Bleach",
+                    "data_type": "boolean",
+                    "order": 19,
+                    "default": true
                 }
             },
             "output": [
@@ -688,6 +700,10 @@
                     "example_values": [
                         1
                     ]
+                },
+                {
+                    "data_path": "action_result.parameter.should_sanitize_template",
+                    "data_type": "boolean"
                 }
             ],
             "versions": "EQ(*)",
@@ -710,6 +726,10 @@
                 "input_file": "wheels/shared/bleach_allowlist-1.0.3-py2.py3-none-any.whl"
             },
             {
+                "module": "pytidyhtml5",
+                "input_file": "wheels/py39/pytidyhtml5-2024.10.24-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+            },
+            {
                 "module": "tinycss2",
                 "input_file": "wheels/py3/tinycss2-1.4.0-py3-none-any.whl"
             },
@@ -730,12 +750,16 @@
                 "input_file": "wheels/shared/bleach_allowlist-1.0.3-py2.py3-none-any.whl"
             },
             {
+                "module": "pytidyhtml5",
+                "input_file": "wheels/py313/pytidyhtml5-2024.10.24-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+            },
+            {
                 "module": "tinycss2",
                 "input_file": "wheels/py3/tinycss2-1.4.0-py3-none-any.whl"
             },
             {
                 "module": "webencodings",
-                "input_file": "wheels/shared/webencodings-0.5.1-py2.py3-none-any.whl"
+                "input_file": "wheels/py3/webencodings-0.6.1-py3-none-any.whl"
             }
         ]
     }

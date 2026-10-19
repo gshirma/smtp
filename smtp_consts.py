@@ -1,6 +1,6 @@
 # File: smtp_consts.py
 #
-# Copyright (c) 2016-2025 Splunk Inc.
+# Copyright (c) 2016-2026 Splunk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@ SMTP_JSON_TOTAL_POSITIVES = "total_positives"
 SMTP_JSON_TOTAL_GUESTS = "total_guests"
 SMTP_JSON_TOTAL_GUESTS_RUNNING = "total_guests_running"
 SMTP_JSON_SSL_CONFIG = "ssl_config"
+SMTP_VERIFY_SERVER_CERT = "verify_server_cert"
 SSL_CONFIG_NONE = "None"
 SSL_CONFIG_SSL = "SSL"
 SSL_CONFIG_STARTTLS = "StartTLS"

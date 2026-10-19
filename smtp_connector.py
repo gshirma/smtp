@@ -1,6 +1,6 @@
 # File: smtp_connector.py
 #
-# Copyright (c) 2016-2025 Splunk Inc.
+# Copyright (c) 2016-2026 Splunk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import mimetypes
 import os
 import re
 import smtplib
+import ssl
 import sys
 import time
 from email import encoders, message_from_bytes, message_from_string
@@ -28,7 +29,6 @@ from email.mime.image import MIMEImage
 from email.mime.message import MIMEMessage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from html import unescape
 
 import bleach
 import encryption_helper
@@ -41,6 +41,9 @@ from bs4 import BeautifulSoup
 from phantom.action_result import ActionResult
 from phantom.base_connector import BaseConnector
 
+# These public exports come from the compiled _pytidyhtml5 extension.
+from pytidyhtml5 import OptionId, tidy_document  # pylint: disable=no-name-in-module
+
 from request_handler import RequestStateHandler, _get_dir_name_from_app_name
 from smtp_consts import *
 
@@ -52,7 +55,11 @@ class SmtpConnector(BaseConnector):
     ACTION_ID_SEND_RAW_EMAIL = "send_rawemail"
     ACTION_ID_SEND_HTML_EMAIL = "send_htmlemail"
 
-    SAFE_HTML_TAGS = list(set(all_tags) - set(generally_xss_unsafe))
+    # Bleach/html5lib treats document wrapper tags as structural context for HTML
+    # fragments and removes them from the sanitized output. Keep them allowed so
+    # existing full-document email templates do not render the wrappers as text,
+    # while unsupported tags are stripped when sanitization is enabled.
+    SAFE_HTML_TAGS = list((set(all_tags) - set(generally_xss_unsafe)) | {"html", "head", "body"})
 
     def __init__(self):
         # Call the BaseConnectors init first
@@ -158,13 +165,18 @@ class SmtpConnector(BaseConnector):
 
         self.debug_print("Determining auth type")
         auth_type = config.get("auth_type", SMTP_AUTOMATIC_AUTH_TYPE)
+        auth_handlers = {
+            SMTP_OAUTH_AUTH_TYPE: self._with_oauth_type,
+            SMTP_BASIC_AUTH_TYPE: self._with_basic_type,
+            SMTP_PASSWORD_LESS_AUTH_TYPE: self._with_passwordless_type,
+        }
 
         # Check all the auth type as per inputs given by user with flow of [Interactive -> Basic -> Password less]
         self.save_progress(f"You have selected {auth_type} Authentication")  # nosemgrep
         if auth_type == SMTP_AUTOMATIC_AUTH_TYPE:
             for auth_type in SMTP_ALLOWED_AUTH_TYPES[1:]:
                 self.save_progress(SMTP_AUTH_MESSAGE.format(auth_type))  # nosemgrep
-                auth = eval(f"self._with_{auth_type.lower()}_type(action_result)")
+                auth = auth_handlers[auth_type](action_result)
                 if phantom.is_fail(auth):
                     msg = action_result.get_message()
                     self.save_progress(SMTP_AUTH_FAILED_ACTION_MESSAGE.format(action_id, auth_type, msg))  # nosemgrep
@@ -178,8 +190,12 @@ class SmtpConnector(BaseConnector):
                     return phantom.APP_SUCCESS
 
         # Check specific auth type as per input given by user in auth_type parameter
+        auth_handler = auth_handlers.get(auth_type)
+        if auth_handler is None:
+            return action_result.set_status(phantom.APP_ERROR, f"Unsupported authentication type: {auth_type}")
+
         self.save_progress(SMTP_AUTH_MESSAGE.format(auth_type))  # nosemgrep
-        auth = eval(f"self._with_{auth_type.lower()}_type(action_result)")
+        auth = auth_handler(action_result)
         if phantom.is_fail(auth):
             self.debug_print(f"Authentication failed using {auth_type}")
             msg = action_result.get_message()
@@ -551,6 +567,10 @@ class SmtpConnector(BaseConnector):
 
         # Get the SSL config to use
         ssl_config = config.get(SMTP_JSON_SSL_CONFIG, SSL_CONFIG_STARTTLS)
+        tls_context = ssl.create_default_context(cafile=self.get_ca_bundle())
+        if not config.get(SMTP_VERIFY_SERVER_CERT, True):
+            tls_context.check_hostname = False
+            tls_context.verify_mode = ssl.CERT_NONE
 
         # if it is SSL, (not None or StartTLS) then the function to call is different
         if ssl_config == SSL_CONFIG_SSL:
@@ -562,15 +582,17 @@ class SmtpConnector(BaseConnector):
             if phantom.is_fail(ret_val):
                 return action_result.set_status(phantom.APP_ERROR, port_data)
 
-            self._smtp_conn = func_to_use(server, str(port_data))
+            connection_kwargs = {"context": tls_context} if ssl_config == SSL_CONFIG_SSL else {}
+            self._smtp_conn = func_to_use(server, str(port_data), **connection_kwargs)
         else:
-            self._smtp_conn = func_to_use(server)
+            connection_kwargs = {"context": tls_context} if ssl_config == SSL_CONFIG_SSL else {}
+            self._smtp_conn = func_to_use(server, **connection_kwargs)
 
         self._smtp_conn.ehlo()
 
         # Use the StartTLS command if the config was set to StartTLS
-        if self._smtp_conn.has_extn("STARTTLS") and (ssl_config == SSL_CONFIG_STARTTLS):
-            self._smtp_conn.starttls()
+        if ssl_config == SSL_CONFIG_STARTTLS:
+            self._smtp_conn.starttls(context=tls_context)
 
         self._smtp_conn.ehlo()
         # Login
@@ -651,6 +673,7 @@ class SmtpConnector(BaseConnector):
                 part_plain = MIMEText(text, "plain")
 
             outer.attach(part_plain)
+
         except Exception as e:
             self.debug_print(f"Error in converting html body to text {self._get_error_message_from_exception(e)}")
 
@@ -666,6 +689,20 @@ class SmtpConnector(BaseConnector):
             self.debug_print(f"Error while attaching html body to outer {self._get_error_message_from_exception(e)}")
 
         return phantom.APP_SUCCESS
+
+    def _set_refused_recipients_error(self, action_result, refused_recipients):
+        refused_details = {}
+        for recipient, (status_code, response) in refused_recipients.items():
+            if isinstance(response, bytes):
+                response = response.decode(errors="replace")
+            refused_details[recipient] = {"status_code": status_code, "response": str(response)}
+
+        action_result.add_data({"refused_recipients": refused_details})
+        action_result.update_summary({"refused_recipients": sorted(refused_details)})
+        return action_result.set_status(
+            phantom.APP_ERROR,
+            f"{SMTP_ERROR_SMTP_SEND_EMAIL}. Server refused the following recipients: {', '.join(sorted(refused_details))}",
+        )
 
     def _add_attachments(self, outer, attachments, action_result, message_encoding):
         if not attachments:
@@ -921,7 +958,11 @@ class SmtpConnector(BaseConnector):
             mail_options = list()
             if smtputf8:
                 mail_options.append("SMTPUTF8")
-            self._smtp_conn.sendmail(email_from, to_list, outer.as_bytes(), mail_options=mail_options)
+
+            refused_recipients = self._smtp_conn.sendmail(email_from, to_list, outer.as_bytes(), mail_options=mail_options)
+            if refused_recipients:
+                return self._set_refused_recipients_error(action_result, refused_recipients)
+
         except UnicodeEncodeError:
             return action_result.set_status(phantom.APP_ERROR, f"{SMTP_ERROR_SMTP_SEND_EMAIL}. {SMTP_ERROR_SMTPUTF8_CONFIG}")
         except Exception as e:
@@ -1078,15 +1119,34 @@ class SmtpConnector(BaseConnector):
         email_html = param["html_body"]
         email_text = param.get("text_body")
         attachment_json = param.get("attachment_json")
+        should_sanitize = param.get("should_sanitize_template", True)
 
-        email_html = bleach.clean(
-            text=email_html,
-            tags=self.SAFE_HTML_TAGS,
-            attributes=BLEACH_SAFE_HTML_ATTRIBUTES,
-            css_sanitizer=CSSSanitizer(allowed_css_properties=all_styles),
-            protocols=list(bleach.ALLOWED_PROTOCOLS) + SMTP_BLEACH_ALLOWED_PROTOCOLS,
-        )
-        email_html = unescape(email_html)
+        if should_sanitize:
+            try:
+                email_html = tidy_document(
+                    email_html,
+                    options={
+                        OptionId.word2000: True,
+                        OptionId.drop_prop_attrs: True,
+                        OptionId.html_out: True,
+                        OptionId.mark: False,
+                        OptionId.drop_empty_paras: False,
+                        OptionId.drop_empty_elems: False,
+                    },
+                    encoding="unicode",
+                    body_only=True,
+                    quiet=True,
+                )
+                email_html = bleach.clean(
+                    text=email_html,
+                    tags=self.SAFE_HTML_TAGS,
+                    attributes=BLEACH_SAFE_HTML_ATTRIBUTES,
+                    css_sanitizer=CSSSanitizer(allowed_css_properties=all_styles),
+                    protocols=list(bleach.ALLOWED_PROTOCOLS) + SMTP_BLEACH_ALLOWED_PROTOCOLS,
+                    strip=True,
+                )
+            except Exception:
+                return action_result.set_status(phantom.APP_ERROR, "Error: failed to sanitize HTML body")
 
         encoding = config.get(SMTP_ENCODING, False)
         smtputf8 = config.get(SMTP_ALLOW_SMTPUTF8, False)
@@ -1249,7 +1309,10 @@ class SmtpConnector(BaseConnector):
             mail_options = list()
             if smtputf8:
                 mail_options.append("SMTPUTF8")
-            self._smtp_conn.sendmail(email_from, email_to, root.as_bytes(), mail_options=mail_options)
+
+            refused_recipients = self._smtp_conn.sendmail(email_from, email_to, root.as_bytes(), mail_options=mail_options)
+            if refused_recipients:
+                return self._set_refused_recipients_error(action_result, refused_recipients)
 
         except UnicodeEncodeError:
             return action_result.set_status(phantom.APP_ERROR, f"{SMTP_ERROR_SMTP_SEND_EMAIL}. {SMTP_ERROR_SMTPUTF8_CONFIG}")
@@ -1305,7 +1368,10 @@ class SmtpConnector(BaseConnector):
             if smtputf8:
                 mail_options.append("SMTPUTF8")
             self.debug_print("Making SMTP call")
-            self._smtp_conn.sendmail(email_from, email_to, msg.as_bytes(), mail_options=mail_options)
+
+            refused_recipients = self._smtp_conn.sendmail(email_from, email_to, msg.as_bytes(), mail_options=mail_options)
+            if refused_recipients:
+                return self._set_refused_recipients_error(action_result, refused_recipients)
 
         except UnicodeEncodeError:
             return action_result.set_status(phantom.APP_ERROR, f"{SMTP_ERROR_SMTP_SEND_EMAIL}. {SMTP_ERROR_SMTPUTF8_CONFIG}")
